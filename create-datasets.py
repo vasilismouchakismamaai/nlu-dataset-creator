@@ -5,20 +5,21 @@ import numpy as np
 import json
 from pandas import json_normalize
 import string
+from unidecode import unidecode
 
 
-def load_data(file_path: str, delimiter: str, extention: str) -> pd.DataFrame:
+def load_data(file_path: str, separator: str, extention: str) -> pd.DataFrame:
     """
     :param file_path: path to a file
     :param delimiter: delimiter for csv files
     :param extention: the extention of the file (csv/json)
     """
     if extention == "csv":
-        column_names = ("text", "intent", "entity-label")
-        delimiter = delimiter
-        data = pd.read_csv(file_path, names=column_names, delimiter=delimiter, keep_default_na=False)
+        column_names = ("text", "label", "entity-label")
+        separator = separator
+        data = pd.read_csv(file_path, names=column_names, delimiter=separator, keep_default_na=False)
     elif extention == "json":
-        data = pd.read_json(path_or_buf="/content/drive/MyDrive/ner/data/admin.json", lines=True)
+        data = pd.read_json(path_or_buf=file_path, lines=True)
     else:
         sys.exit(F"The {extention} file extention is not supported")
 
@@ -48,23 +49,42 @@ def bio_tag(dataset: pd.DataFrame) -> pd.DataFrame:
     return dataset
 
 
+def handle_diacritics(data: pd.DataFrame, task: str):
+    print(task)
+    if task == "intents":
+        d_text = data["text"].apply(unidecode)
+        d_label = data["label"].apply(unidecode)
+        d_data = pd.DataFrame({"text": d_text, "label": d_label})
+        result = pd.concat([data, d_data])
+        return result
+    elif task == "entities":
+        print(data)
+        return data
+    else:
+        exit()
+
+
 def prepare_intent_dataset(file_path: str,
-                           delimiter: str,
+                           separator: str,
                            extention: str,
                            file_name: str,
                            task: str = "intents",
+                           diacritics: bool = True,
                            save: bool = True) -> pd.DataFrame:
     """
     :param file_path: path to a file
     :param delimiter: delimiter for csv files
     :param extention: the extention of the file (csv/json)
     :param file_name: name for saving the final dataset
-    :param task: task, in this case 'intents;
+    :param task: task, in this case 'intents
+    :param diaciritcs: if yes, duplicate data without diacritics
     :param save: flag for saving the dataset if true
     :return: a dataset ready for model training
     """
-    data = load_data(file_path=file_path, delimiter=delimiter, extention=extention)
-    data = data[["text", "intent"]]
+    data = load_data(file_path=file_path, separator=separator, extention=extention)
+    data = data[["text", "label"]]
+    if diacritics:
+        data = handle_diacritics(data, task)
     if save:
         outpath = f"{task}-{file_name}.csv"
         data.to_csv(outpath, header=["text", "label"], index=False)
@@ -72,25 +92,26 @@ def prepare_intent_dataset(file_path: str,
 
 
 def prepare_entities_dataset(file_path: str,
-                             delimiter: str,
+                             separator: str,
                              extention: str,
-                             source: str,
+                             source_type: str,
                              file_name: str,
                              task: str = "entities",
+                             diacritics: bool = True,
                              save: bool = True) -> pd.DataFrame:
     """
     :param file_path: path to a file
     :param delimiter: delimiter for csv files
     :param extention: the extention of the file (csv/json)
-    :param source: the source of the initial dataset (manual/doccano)
+    :param source_type: the source of the initial dataset (manual/doccano)
     :param file_name: name for saving the final dataset
     :param task: task, in this case 'entities'
+    :param diaciritcs: if yes, duplicate data without diacritics
     :param save: flag for saving the dataset if true
     :return: a dataset ready for model training
     """
-    data = load_data(file_path=file_path, delimiter=delimiter, extention=extention)
-    # data = pd.read_csv("animals_cs_entities-full.csv", delimiter=",", names=("text", "entity-label"))
-    if source == "manual":
+    data = load_data(file_path=file_path, separator=separator, extention=extention)
+    if source_type == "manual":
         data = data[["text", "entity-label"]]
         data = data.rename(columns={"index": "Sentence #"})
 
@@ -123,13 +144,16 @@ def prepare_entities_dataset(file_path: str,
         data = data.dropna()
         data = bio_tag(data)
 
+        if diacritics:
+            data = handle_diacritics(data, task)
+
         if save:
             outpath = f"{task}-{file_name}.csv"
             data.to_csv(outpath, index=False)
         
         return data
 
-    elif source == "doccano":
+    elif source_type == "doccano":
         data = pd.read_json(path_or_buf=file_path, lines=True)
 
         for index, row in data.iterrows():
@@ -155,14 +179,17 @@ def prepare_entities_dataset(file_path: str,
                 data.loc[index, "tag"] = "O"
         
         data = bio_tag(data)
-
+        data = data[["Sentence #", "text", "tag"]]
+        if diacritics:
+            data = handle_diacritics(data, task)
+        
         if save:
             outpath = f"{task}-{file_name}.csv"
             data.to_csv(outpath, index=False)
 
         return data
     else:
-        sys.exit(f"Source: '{source}' is not supported")
+        sys.exit(f"Source: '{source_type}' is not supported")
 
 
 def intents_args(args):
@@ -170,11 +197,17 @@ def intents_args(args):
     :param args: command line arguments
     """
     file_path = args.path
-    delimiter = args.delimiter
+    separator = args.separator
     extention = args.extention
     file_name = args.out
-    prepare_intent_dataset(file_path, delimiter, extention, file_name)
-
+    diacritics = True if args.diacritics=="yes" else False
+    prepare_intent_dataset(file_path=file_path,
+                           separator=separator,
+                           extention=extention,
+                           file_name=file_name,
+                           task="intents",
+                           diacritics=diacritics,
+                           save=True)
 
 
 
@@ -183,11 +216,19 @@ def entities_args(args):
     :param args: command line arguments
     """
     file_path = args.path
-    delimiter = args.delimiter
+    separator = args.separator
     extention = args.extention
     file_name = args.out
-    source = args.source
-    prepare_entities_dataset(file_path, delimiter, extention, source, file_name)
+    diacritics = True if args.diacritics=="yes" else False
+    source_type = args.type
+    prepare_entities_dataset(file_path=file_path,
+                             separator=separator,
+                             extention=extention,
+                             source_type=source_type,
+                             file_name=file_name,
+                             task="entities",
+                             diacritics=diacritics,
+                             save=True)
 
 
 
@@ -199,9 +240,10 @@ def parse_args() -> argparse.Namespace:
 
     parent_parser = argparse.ArgumentParser(add_help=False)
     parent_parser.add_argument("-p", "--path", type=str, required=True, help="data path")
-    parent_parser.add_argument("-d", "--delimiter", type=str, required=True, help="delimiter: ',' / '\t'")
+    parent_parser.add_argument("-s", "--separator", type=str, required=True, help="delimiter: ',' / '\t'")
     parent_parser.add_argument("-e", "--extention", type=str, help="file extention: csv / json")
     parent_parser.add_argument("-o", "--out", type=str, help="final name for the produced file")
+    parent_parser.add_argument("-d", "--diacritics", type=str, help="if 'yes', duplicate examples with no diacritcs", choices={"yes", "no"})
 
     parser = argparse.ArgumentParser()
     subparsers = parser.add_subparsers()
@@ -210,7 +252,7 @@ def parse_args() -> argparse.Namespace:
     intents_parser.set_defaults(func=intents_args)
 
     entities_parser = subparsers.add_parser("entities", help="create dataset for ner", aliases="e", parents=[parent_parser])
-    entities_parser.add_argument("-s", "--source", type=str, help="source: manual / doccano")
+    entities_parser.add_argument("-t", "--type", type=str, help="type: manual / doccano")
     entities_parser.set_defaults(func=entities_args)
 
     return parser.parse_args()
@@ -220,6 +262,6 @@ if __name__ == "__main__":
     args = parse_args()
     args.func(args)
 
-# python -m create-datasets intents -p data.csv -d , -e csv -o data  
-# python -m create-datasets entities -p data.csv -d , -e csv -o data -s manual  
-# python -m create-datasets entities -p admin.json -d , -e csv -o data -s doccano
+# python -m create-datasets intents -p data.csv -s ',' -e csv -o data -d yes
+# python -m create-datasets entities -p data.csv -s ',' -e csv -o data -t manual
+# python -m create-datasets entities -p admin.json -s ',' -e csv -o data -t doccano
